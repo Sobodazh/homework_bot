@@ -6,8 +6,9 @@ from dotenv import load_dotenv
 import os
 import time
 import logging
+from telegram import Bot
 
-from exceptions import HTTPStatusError
+from exceptions import HTTPStatusError, TokenError, ErrorFromAPI
 
 load_dotenv()
 
@@ -38,41 +39,38 @@ HOMEWORK_VERDICTS = {
 }
 
 
-def check_tokens():
+def check_tokens() -> bool:
     """Проверяем наличие обязательных ключей доступа."""
-    if all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
-        return True
-    return False
+    if not all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
+        logger.critical('Нет необходимого токена')
+        return False
 
 
-def send_message(bot, message):
+def send_message(bot: Bot, message: str) -> any:
     """Отправляем сообщение в зависимости от статуса работы."""
     try:
         bot.send_message(chat_id=TELEGRAM_CHAT_ID,
                          text=message,)
-        logger.debug(f'Сообщение "{message}" отправлено успешно!')
     except Exception as err:
         logger.error(f'Что то пошло не так при отправке сообщения'
                      f'"{message}",{err}', exc_info=True)
+    finally:
+        logger.debug(f'Сообщение "{message}" отправлено успешно!')
 
 
-def get_api_answer(timestamp):
+def get_api_answer(timestamp: int) -> dict:
     """Функция делает запрос к эндпоинту API-сервиса и возвращает ответ API."""
     payload = {'from_date': timestamp}
     try:
         response = requests.get(ENDPOINT, headers=HEADERS, params=payload)
-        if response.status_code != HTTPStatus.OK:
-            raise HTTPStatusError('Ошибка при обращении к API')
     except requests.RequestException as error:
-        logging.error(f'Ошибка при запросе к основному API: {error}')
-        telegram.Bot(token=TELEGRAM_TOKEN).send_message(
-            TELEGRAM_CHAT_ID,
-            f'Ошибка при запросе к основному API: {error}'
-        )
+        logger.error(f'Ошибка при запросе к основному API: {error}')
+    if response.status_code != HTTPStatus.OK:
+        raise HTTPStatusError('Ошибка при обращении к API')
     return response.json()
 
 
-def check_response(response):
+def check_response(response: dict) -> dict:
     """Проверяем значения в ответе API с данными нашей домашней работы."""
     if not isinstance(response, dict):
         raise TypeError('Запрашиваемый ответ не является словарем')
@@ -83,14 +81,16 @@ def check_response(response):
     return response.get('homeworks')[0]
 
 
-def parse_status(homework):
+def parse_status(homework: dict) -> str:
     """Извлекаем статус конкретной домашней работы."""
     if 'status' not in homework.keys():
-        raise KeyError('Нет необходимого ключа статуса домашней работы')
+        raise ErrorFromAPI(
+            ('Отсутствует ключ "status", проверьте выходные данные'))
     if 'homework_name' not in homework.keys():
-        raise KeyError('Нет необходимого ключа названия домашней работы')
+        raise ErrorFromAPI(
+            ('Отсутствует ключ "homework_name", проверьте выходные данные'))
     if homework.get('status') not in HOMEWORK_VERDICTS.keys() or None:
-        raise KeyError('Неизвестный статус домашней')
+        raise ErrorFromAPI('Неизвестный статус домашней работы')
 
     verdict = homework.get('status')
     homework_name = homework.get('homework_name')
@@ -106,8 +106,9 @@ def parse_status(homework):
 
 def main():
     """Основная логика работы бота."""
+    check_tokens()
     if check_tokens() is False:
-        raise logger.critical('Отсутствует обязательная переменная окружения')
+        raise TokenError('Отсутствует обязательная переменная окружения')
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     old_message = None
@@ -118,8 +119,12 @@ def main():
             homework = check_response(response)
             message = parse_status(homework)
         except Exception as err:
+            logger.error(f'Ошибка при запросе к основному API: {err}')
             message = f'Сбой в работе программы: {err}'
-
+            bot.send_message(
+                TELEGRAM_CHAT_ID,
+                f'Ошибка при запросе к основному API: {err}'
+            )
         if old_message != message:
             send_message(bot, message)
         old_message = message
