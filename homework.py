@@ -8,7 +8,7 @@ import time
 import logging
 from telegram import Bot
 
-from exceptions import HTTPStatusError, TokenError, ErrorFromAPI
+from exceptions import HTTPStatusError, TokenError, ErrorFromAPI, APIError
 
 load_dotenv()
 
@@ -42,8 +42,12 @@ HOMEWORK_VERDICTS = {
 def check_tokens() -> bool:
     """Проверяем наличие обязательных ключей доступа."""
     if not all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
-        logger.critical('Нет необходимого токена')
+        logger.critical(
+            'Отсутствует обязательная переменная окружения,'
+            'программа остановлена'
+        )
         return False
+    return True
 
 
 def send_message(bot: Bot, message: str) -> any:
@@ -72,12 +76,15 @@ def get_api_answer(timestamp: int) -> dict:
 
 def check_response(response: dict) -> dict:
     """Проверяем значения в ответе API с данными нашей домашней работы."""
-    if not isinstance(response, dict):
-        raise TypeError('Запрашиваемый ответ не является словарем')
-    if 'homeworks' not in response.keys():
-        raise TypeError('Нет необходимого ключа "homeworks"')
-    if not isinstance(response.get('homeworks'), list):
-        raise TypeError('Ключ "homeworks" не содержит необходимого списка')
+    try:
+        if not isinstance(response, dict):
+            raise APIError('Запрашиваемый ответ не является словарем')
+        if 'homeworks' not in response.keys():
+            raise APIError('Нет необходимого ключа "homeworks"')
+        if not isinstance(response.get('homeworks'), list):
+            raise APIError('Ключ "homeworks" не содержит необходимого списка')
+    except TypeError as err:
+        raise APIError(f'Неподходящий тип данных, {err}')
     return response.get('homeworks')[0]
 
 
@@ -107,7 +114,7 @@ def parse_status(homework: dict) -> str:
 def main():
     """Основная логика работы бота."""
     check_tokens()
-    if check_tokens() is False:
+    if not check_tokens():
         raise TokenError('Отсутствует обязательная переменная окружения')
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
